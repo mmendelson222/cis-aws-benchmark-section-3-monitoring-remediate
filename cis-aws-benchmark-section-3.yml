@@ -1,0 +1,792 @@
+---
+#====================================================================================================
+# AWS CloudFormation template for establishing CIS AWS 1.1 benchmark governance rules
+# Download the benchmarks here: https://benchmarks.cisecurity.org/en-us/?route=downloads.form.awsfoundations.110
+#
+# This template was created by Michael Mendelson, and combines elements of:
+# https://github.com/virtualjj/cis-aws-benchmark-section-3-monitoring-remediate and
+# https://github.com/awslabs/aws-security-benchmark/blob/master/architecture/create-benchmark-rules.yaml
+#
+# The following preconditions must be met before the stack can be launched:
+#      Precondition 0: An SNS topic must be created for alarm notifications.   All alarms will point to the same topic.
+#      Precondition 1: Config must be running in the region where this template will be run. This is needed for Config Rules.
+#      Precondition 2: CloudTrail must be delivering logs to CloudWatch Logs. This is needed for CloudWatch metrics and alarms.
+#      Precondition 3: Lambda must be supported in the region where this template will be launched. See this page for region support:
+#                      https://aws.amazon.com/about-aws/global-infrastructure/regional-product-services/
+#====================================================================================================
+
+AWSTemplateFormatVersion: 2010-09-09
+Description: Establishes a baseline set of security controls
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: ARN of sns topic
+        Parameters:
+          - SnsArnForCloudWatchEvents
+      - Label:
+          default: NAME YOUR METRIC NAMESPACE 
+        Parameters:  
+        - CWMetricNamespace
+      - Label:
+          default: NAME YOUR ALARMS & METRIC FILTER NAMES
+        Parameters:
+        - 31UnauthAPICalls
+        - 32MgmtConsoleNoMFA
+        - 33UseOfRootAcct
+        - 34IAMPolicyChanges
+        - 35CloudTrailConfigChanges
+        - 36ConsoleAuthFailures
+        - 37DisableDeleteCMK
+        - 38S3BucketPolicyChanges
+        - 39AWSConfigChanges
+        - 310SecGroupChanges
+        - 311NACLChanges
+        - 312NetworkGatewayChanges
+        - 313RouteTableChanges
+        - 314VPCChanges
+          
+    ParameterLabels:
+      SnsArnForCloudWatchEvents:
+        default: SNS ARN
+      CWMetricNamespace:
+        default: Name your namspace        
+      31UnauthAPICalls:
+        default: Unauthorized API Calls
+      32MgmtConsoleNoMFA:
+        default: Management Console Sign in without MFA
+      33UseOfRootAcct:
+        default: Usage of root account
+      34IAMPolicyChanges:
+        default: IAM Policy Changes
+      35CloudTrailConfigChanges:
+        default: CloudTrail Configuration Changes
+      37DisableDeleteCMK:
+        default: Disabling or Deletion of KMS CMKs
+      38S3BucketPolicyChanges:
+        default: S3 Bucket Policy Changes
+      39AWSConfigChanges:
+        default: AWS Config Changes
+      310SecGroupChanges:
+        default: Security Group Changes
+      311NACLChanges:
+        default: NACL Changes
+      312NetworkGatewayChanges:
+        default: Network Gateway Changes
+      313RouteTableChanges:
+        default: Route Table Changes
+      314VPCChanges:
+        default: VPC Changes
+        
+#==================================================
+# Parameters
+#==================================================
+Parameters:
+  SnsArnForCloudWatchEvents:
+    Description: ARN of the SNS topic to use for notifications.  Use the arn of smx-critical-alarm-triggered.  If CAMS CMS is installed, this is already present.
+    Type: String
+    Default: "arn:aws:sns:region:account-id:topicname"
+  CWMetricNamespace:
+    Description: "Namespace to use for CloudWatch metrics. Allowed: alphanumeric characters (0-9A-Za-z), period (.), hyphen (-), underscore (_), forward slash (/), hash (#), and colon (:)."
+    Type: String
+    MaxLength: 255
+    Default: CisBenchmark    
+  31UnauthAPICalls:
+    Description: 3.01 Ensure a log metric filter and alarm exist for unauthorized API calls 
+    Type: String
+    Default: CIS Benchmark v.1.1 - 3.01 Unauthorized API Calls
+    MinLength: 1
+    MaxLength: 255
+    # REGEX Help:
+    # This allows one or more (+) alphanumeric characters (\w) with the symbols -_/.
+    # Must escape "\" and symbols with "\"
+    AllowedPattern: "[\\w\\s-_/.]+"
+    ConstraintDescription: "Metric names can contain up to 255 alphanumeric characters, with the following also allowed: -_./"
+  32MgmtConsoleNoMFA:
+    Description: 3.02 Ensure a log metric filter and alarm exist for Management Console sign-in without MFA (Scored)
+    Type: String
+    Default: CIS Benchmark v.1.1 - 3.02 Management Console Sign-in Without MFA
+    MinLength: 1
+    MaxLength: 255
+    AllowedPattern: "[\\w\\s-_/.]+"
+    ConstraintDescription: "Metric names can contain up to 255 alphanumeric characters, with the following also allowed: -_./"
+  33UseOfRootAcct:
+    Description: 3.03 Ensure a log metric filter and alarm exist for usage of "root" account (Scored)
+    Type: String
+    # Be careful - can't use quotes in Metric Filter name so "root" becomes root.
+    Default: CIS Benchmark v.1.1 - 3.03 Usage of root Account
+    MinLength: 1
+    MaxLength: 255
+    AllowedPattern: "[\\w\\s-_/.]+"
+    ConstraintDescription: "Metric names can contain up to 255 alphanumeric characters, with the following also allowed: -_./"
+  34IAMPolicyChanges:
+    Description: 3.04 Ensure a log metric filter and alarm exist for IAM policy changes (Scored)
+    Type: String
+    Default: CIS Benchmark v.1.1 - 3.04 IAM Policy Changes
+    MinLength: 1
+    MaxLength: 255
+    AllowedPattern: "[\\w\\s-_/.]+"
+    ConstraintDescription: "Metric names can contain up to 255 alphanumeric characters, with the following also allowed: -_./"
+  35CloudTrailConfigChanges:
+    Description: 3.05 Ensure a log metric filter and alarm exist for CloudTrail configuration changes (Scored)
+    Type: String
+    Default: CIS Benchmark v.1.1 - 3.05 CloudTrail Config Changes
+    MinLength: 1
+    MaxLength: 255
+    AllowedPattern: "[\\w\\s-_/.]+"
+    ConstraintDescription: "Metric names can contain up to 255 alphanumeric characters, with the following also allowed: -_./"
+  36ConsoleAuthFailures:
+    Description: 3.06 Ensure a log metric filter and alarm exist for AWS Management Console authentication failures (Scored)
+    Type: String
+    Default: CIS Benchmark v.1.1 - 3.06 AWS Management Console Authentication Failures
+    MinLength: 1
+    MaxLength: 255
+    AllowedPattern: "[\\w\\s-_/.]+"
+    ConstraintDescription: "Metric names can contain up to 255 alphanumeric characters, with the following also allowed: -_./"
+  37DisableDeleteCMK:
+    Description: 3.07 Ensure a log metric filter and alarm exist for disabling or scheduled deletion of customer created CMKs (Scored)
+    Type: String
+    Default: CIS Benchmark v.1.1 - 3.07 Disabling or Scheduled Deletion of Customer Created CMKs
+    MinLength: 1
+    MaxLength: 255
+    AllowedPattern: "[\\w\\s-_/.]+"
+    ConstraintDescription: "Metric names can contain up to 255 alphanumeric characters, with the following also allowed: -_./"
+  38S3BucketPolicyChanges:
+    Description: 3.08 Ensure a log metric filter and alarm exist for S3 bucket policy changes (Scored)
+    Type: String
+    Default: CIS Benchmark v.1.1 - 3.08 S3 Bucket Policy Changes
+    MinLength: 1
+    MaxLength: 255
+    AllowedPattern: "[\\w\\s-_/.]+"
+    ConstraintDescription: "Metric names can contain up to 255 alphanumeric characters, with the following also allowed: -_./"
+  39AWSConfigChanges:
+    Description: 3.09 Ensure a log metric filter and alarm exist for AWS Config configuration changes (Scored)
+    Type: String
+    Default: CIS Benchmark v.1.1 - 3.09 AWS Config Configuration Changes
+    MinLength: 1
+    MaxLength: 255
+    AllowedPattern: "[\\w\\s-_/.]+"
+    ConstraintDescription: "Metric names can contain up to 255 alphanumeric characters, with the following also allowed: -_./"
+  310SecGroupChanges:
+    Description: 3.10 Ensure a log metric filter and alarm exist for AWS Config configuration changes (Scored)
+    Type: String
+    Default: CIS Benchmark v.1.1 - 3.10 Security Group Changes
+    MinLength: 1
+    MaxLength: 255
+    AllowedPattern: "[\\w\\s-_/.]+"
+    ConstraintDescription: "Metric names can contain up to 255 alphanumeric characters, with the following also allowed: -_./"
+  311NACLChanges:
+    Description: 3.11 Ensure a log metric filter and alarm exist for changes to Network Access Control Lists (NACL) (Scored)
+    Type: String
+    # Be careful - "()" not allowed so (NACL) becomes NACL.
+    Default: CIS Benchmark v.1.1 - 3.11 Changes to Network Access Control Lists NACL
+    MinLength: 1
+    MaxLength: 255
+    AllowedPattern: "[\\w\\s-_/.]+"
+    ConstraintDescription: "Metric names can contain up to 255 alphanumeric characters, with the following also allowed: -_./"
+  312NetworkGatewayChanges:
+    Description: 3.12 Ensure a log metric filter and alarm exist for changes to network gateways (Scored)
+    Type: String
+    Default: CIS Benchmark v.1.1 - 3.12 Changes to Network Gateways
+    MinLength: 1
+    MaxLength: 255
+    AllowedPattern: "[\\w\\s-_/.]+"
+    ConstraintDescription: "Metric names can contain up to 255 alphanumeric characters, with the following also allowed: -_./"
+  313RouteTableChanges:
+    Description: 3.13 Ensure a log metric filter and alarm exist for route table changes (Scored)
+    Type: String
+    Default: CIS Benchmark v.1.1 - 3.13 Route Table Changes
+    MinLength: 1
+    MaxLength: 255
+    AllowedPattern: "[\\w\\s-_/.]+"
+    ConstraintDescription: "Metric names can contain up to 255 alphanumeric characters, with the following also allowed: -_./"
+  314VPCChanges:
+    Description: 3.14 Ensure a log metric filter and alarm exist for VPC changes (Scored)
+    Type: String
+    Default: CIS Benchmark v.1.1 - 3.14 VPC Changes
+    MinLength: 1
+    MaxLength: 255
+    AllowedPattern: "[\\w\\s-_/.]+"
+    ConstraintDescription: "Metric names can contain up to 255 alphanumeric characters, with the following also allowed: -_./"
+
+#==================================================
+# Conditions
+#==================================================
+Conditions:
+  IsLevel2: !Equals ["true", "true"]
+
+#==================================================
+# Resources
+#==================================================
+Resources:
+
+  #==================================================
+  # Resources for EvaluateCisBenchmarkingPreconditions
+  #==================================================
+  MasterConfigRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: CIS3cfTemplateLambdaRole
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service: [lambda.amazonaws.com]
+            Action:
+              - sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEC2ReadOnlyAccess
+        - arn:aws:iam::aws:policy/AWSCloudTrailReadOnlyAccess
+        - arn:aws:iam::aws:policy/IAMReadOnlyAccess
+        - arn:aws:iam::aws:policy/service-role/AWSConfigRulesExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        -
+          PolicyName: KmsReadOnly
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              -
+                Effect: Allow
+                Action:
+                  - kms:GetKeyRotationStatus
+                  - kms:ListKeys
+                Resource: "*"
+        -
+          PolicyName: S3ReadOnly
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              -
+                Effect: Allow
+                Action:
+                  - s3:GetBucketAcl
+                  - s3:GetBucketLogging
+                Resource: "*"
+
+  FunctiontForEvaluateCisBenchmarkingPreconditions:
+    Type: AWS::Lambda::Function
+    DependsOn:
+      - MasterConfigRole
+    Properties:
+      FunctionName: EvaluateCisBenchmarkingPreconditions
+      Code:
+        ZipFile: |
+          #==================================================================================================
+          # Function: EvaluateCisBenchmarkingPreconditions
+          # Purpose:  Evaluates preconditions for CIS benchmarking
+          #
+          #           Precondition 1: Config must have an active recorder running.
+          #                           This is needed for Config Rules.
+          #           Precondition 2: CloudTrail must be delivering logs to CloudWatch Logs
+          #                           This is needed for CloudWatch metrics and alarms.
+          #==================================================================================================
+
+          import json
+          import boto3
+          import cfnresponse
+
+          def lambda_handler(event, context):
+
+              response_status = cfnresponse.SUCCESS
+              response_data = ''
+
+              # Only execute in a custom CloudFormation resource creation event.
+              if 'RequestType' in event and event['RequestType'] == 'Create':
+
+                  is_recording = False
+
+                  # Determine whether there is at least one configuration recorder recording.
+                  for recorder in boto3.client('config').describe_configuration_recorder_status()['ConfigurationRecordersStatus']:
+                      is_recording = is_recording or recorder['recording']
+
+                  if not is_recording:
+                      response_status = cfnresponse.FAILED
+                      response_data = response_data + 'There is no active Config Recorder.'
+
+                  # Determine whether any of the trails are delivering logs to CloudWatch Logs (the trail and log must be in-region)
+                  is_delivering_logs = False
+                  for trail in boto3.client('cloudtrail').describe_trails(includeShadowTrails=False)['trailList']:
+                    if 'CloudWatchLogsLogGroupArn' in trail:
+                        is_delivering_logs = True
+                        break
+
+                  if not is_delivering_logs:
+                      response_status = cfnresponse.FAILED
+                      response_data = response_data + ' CloudTrail is not delivering logs to CloudWatch Logs.'
+
+              cfnresponse.send(event, context, response_status, {"Response":response_data}, '')
+
+      Description: Evaluates preconditions for CIS benchmarking
+      Handler: index.lambda_handler
+      MemorySize: 1024
+      Role: !GetAtt MasterConfigRole.Arn
+      Runtime: python2.7
+      Timeout: 5
+
+  ResourceForEvaluateCisBenchmarkingPreconditions:
+    Type: Custom::ResourceForEvaluateCisBenchmarkingPreconditions
+    DependsOn: FunctiontForEvaluateCisBenchmarkingPreconditions
+    Properties:
+      ServiceToken: !GetAtt FunctiontForEvaluateCisBenchmarkingPreconditions.Arn
+
+#==================================================
+# CloudWatch Logs Metrics and Alarms
+#==================================================
+
+  #==================================================
+  # Resources for GetCloudTrailCloudWatchLog
+  #==================================================
+  GetCloudTrailCloudWatchLog:
+    Type: AWS::Lambda::Function
+    DependsOn: MasterConfigRole
+    Properties:
+      FunctionName: GetCloudTrailCloudWatchLog
+      Code:
+        ZipFile: |
+          #==================================================================================================
+          # Function: GetCloudTrailCloudWatchLog
+          # Purpose:  Returns the CloudWatch Log that is used by CloudTrail
+          #==================================================================================================
+
+          import boto3
+          import cfnresponse
+
+          def lambda_handler(event, context):
+
+              cloudwatch_log = ''
+              response_data = {}
+
+              if event['RequestType'] == 'Create':
+
+                for trail in boto3.client('cloudtrail').describe_trails(includeShadowTrails=False)['trailList']:
+                  if 'CloudWatchLogsLogGroupArn' in trail:
+                    cloudwatch_log = trail['CloudWatchLogsLogGroupArn'].split(':')[6]
+                    break
+
+              response_data['LogName'] = cloudwatch_log
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, response_data, '')
+
+      Description: Returns the CloudWatch Log that is used by CloudTrail
+      Handler: index.lambda_handler
+      MemorySize: 128
+      Role: !GetAtt MasterConfigRole.Arn
+      Runtime: python2.7
+      Timeout: 5
+
+  ResourceForGetCloudTrailCloudWatchLog:
+    Type: Custom::ResourceForGetCloudTrailCloudWatchLog
+    DependsOn: GetCloudTrailCloudWatchLog
+    Properties:
+      ServiceToken: !GetAtt GetCloudTrailCloudWatchLog.Arn
+
+# This section configures Metric Filters and associated Alarms.
+# Note that Metric Filter names cannot be set from CloudFormation.
+# Ref: http://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-logs-metricfilter.html
+# Metric Filter Names will display as <stack name>-<resource ID>-<random number>
+# Eg. cis-controls-3-monitoring-31UnAuthAPICallsMetricFilter-1GNOXICLU4ZZD
+  31UnAuthAPICallsMetricFilter:
+    DependsOn:
+    - ResourceForEvaluateCisBenchmarkingPreconditions
+    - ResourceForGetCloudTrailCloudWatchLog
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !GetAtt ResourceForGetCloudTrailCloudWatchLog.LogName
+      FilterPattern: "{ ($.errorCode = \"*UnauthorizedOperation\") || ($.errorCode = \"AccessDenied*\" ) }"
+      MetricTransformations:
+      - MetricName: !Ref 31UnauthAPICalls
+        MetricNamespace: !Ref CWMetricNamespace
+        MetricValue: 1
+  31UnAuthAPICallsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Ref 31UnauthAPICalls
+      AlarmDescription: Alarm for Unauthorized API Calls.
+      AlarmActions:
+      - Ref: SnsArnForCloudWatchEvents
+      MetricName: !Ref 31UnauthAPICalls
+      Namespace: !Ref CWMetricNamespace
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      Period: 60
+      Statistic: Sum
+      Threshold: 5
+      TreatMissingData: notBreaching
+  32MgmtConsoleNoMFAMetricFilter:
+    DependsOn:
+    - ResourceForEvaluateCisBenchmarkingPreconditions
+    - ResourceForGetCloudTrailCloudWatchLog
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !GetAtt ResourceForGetCloudTrailCloudWatchLog.LogName
+      FilterPattern: "{ ($.additionalEventData.MFAUsed != \"Yes\") && ($.eventName = \"ConsoleLogin\") }"
+      MetricTransformations:
+      - MetricName: !Ref 32MgmtConsoleNoMFA
+        MetricNamespace: !Ref CWMetricNamespace
+        MetricValue: 1
+  32MgmtConsoleNoMFAAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Ref 32MgmtConsoleNoMFA
+      AlarmDescription: Alarm for Management Console Sign-in without MFA .
+      AlarmActions:
+      - Ref: SnsArnForCloudWatchEvents
+      MetricName: !Ref 32MgmtConsoleNoMFA
+      Namespace: CIS-SECURITY
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      Period: 60
+      Statistic: Sum
+      Threshold: 1
+      TreatMissingData: notBreaching
+  33UseOfRootAcctMetricFilter:
+    DependsOn:
+    - ResourceForEvaluateCisBenchmarkingPreconditions
+    - ResourceForGetCloudTrailCloudWatchLog
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !GetAtt ResourceForGetCloudTrailCloudWatchLog.LogName
+      FilterPattern: "{ $.userIdentity.type = \"Root\" && $.userIdentity.invokedBy NOT EXISTS && $.eventType != \"AwsServiceEvent\" }"
+      MetricTransformations:
+      - MetricName: !Ref 33UseOfRootAcct
+        MetricNamespace: !Ref CWMetricNamespace
+        MetricValue: 1
+  33UseOfRootAcctAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Ref 33UseOfRootAcct
+      AlarmDescription: Alarm for Usage of "root" Account.
+      AlarmActions:
+      - Ref: SnsArnForCloudWatchEvents
+      MetricName: !Ref 33UseOfRootAcct
+      Namespace: !Ref CWMetricNamespace
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      Period: 60
+      Statistic: Sum
+      Threshold: 1
+      TreatMissingData: notBreaching
+  34IAMPolicyChangesMetricFilter:
+    DependsOn:
+    - ResourceForEvaluateCisBenchmarkingPreconditions
+    - ResourceForGetCloudTrailCloudWatchLog
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !GetAtt ResourceForGetCloudTrailCloudWatchLog.LogName
+      FilterPattern: "{ ($.eventName=DeleteGroupPolicy) || ($.eventName=DeleteRolePolicy) || ($.eventName=DeleteUserPolicy) || ($.eventName=PutGroupPolicy) || ($.eventName=PutRolePolicy) || ($.eventName=PutUserPolicy) || ($.eventName=CreatePolicy) || ($.eventName=DeletePolicy) || ($.eventName=CreatePolicyVersion)  || ($.eventName=DeletePolicyVersion) || ($.eventName=AttachRolePolicy) || ($.eventName=DetachRolePolicy) || ($.eventName=AttachUserPolicy) || ($.eventName=DetachUserPolicy) || ($.eventName=AttachGroupPolicy) || ($.eventName=DetachGroupPolicy) }"
+      MetricTransformations:
+      - MetricName: !Ref 34IAMPolicyChanges
+        MetricNamespace: !Ref CWMetricNamespace
+        MetricValue: 1
+  34IAMPolicyChangesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Ref 34IAMPolicyChanges
+      AlarmDescription: Alarm for IAM Policy Changes.
+      AlarmActions:
+      - Ref: SnsArnForCloudWatchEvents
+      MetricName: !Ref 34IAMPolicyChanges
+      Namespace: !Ref CWMetricNamespace
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      Period: 60
+      Statistic: Sum
+      Threshold: 1
+      TreatMissingData: notBreaching
+  35CloudTrailConfigChangesMetricFilter:
+    DependsOn:
+    - ResourceForEvaluateCisBenchmarkingPreconditions
+    - ResourceForGetCloudTrailCloudWatchLog
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !GetAtt ResourceForGetCloudTrailCloudWatchLog.LogName
+      FilterPattern: "{ ($.eventName = CreateTrail) || ($.eventName = UpdateTrail)
+        || ($.eventName = DeleteTrail) || ($.eventName = StartLogging) || ($.eventName
+        = StopLogging) }"
+      MetricTransformations:
+      - MetricName: !Ref 35CloudTrailConfigChanges
+        MetricNamespace: !Ref CWMetricNamespace
+        MetricValue: 1
+  35CloudTrailConfigChangesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Ref 35CloudTrailConfigChanges
+      AlarmDescription: Alarm for CloudTrail Configuration Changes.
+      AlarmActions:
+      - Ref: SnsArnForCloudWatchEvents
+      MetricName: !Ref 35CloudTrailConfigChanges
+      Namespace: !Ref CWMetricNamespace
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      Period: 60
+      Statistic: Sum
+      Threshold: 1
+      TreatMissingData: notBreaching
+  36ConsoleAuthFailuresMetricFilter:
+    DependsOn:
+    - ResourceForEvaluateCisBenchmarkingPreconditions
+    - ResourceForGetCloudTrailCloudWatchLog
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !GetAtt ResourceForGetCloudTrailCloudWatchLog.LogName
+      FilterPattern: '{ ($.eventName = ConsoleLogin) && ($.errorMessage = "Failed authentication")}'
+      MetricTransformations:
+      - MetricName: !Ref 36ConsoleAuthFailures
+        MetricNamespace: !Ref CWMetricNamespace
+        MetricValue: 1
+  36ConsoleAuthFailuresAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Ref 36ConsoleAuthFailures
+      AlarmDescription: Alarm for Failed Console Logins.
+      AlarmActions:
+      - Ref: SnsArnForCloudWatchEvents
+      MetricName: !Ref 36ConsoleAuthFailures
+      Namespace: !Ref CWMetricNamespace
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      Period: 300
+      Statistic: Sum
+      Threshold: 5
+      TreatMissingData: notBreaching
+  37DisableDeleteCMKMetricFilter:
+    DependsOn:
+    - ResourceForEvaluateCisBenchmarkingPreconditions
+    - ResourceForGetCloudTrailCloudWatchLog
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !GetAtt ResourceForGetCloudTrailCloudWatchLog.LogName
+      FilterPattern: "{ ($.eventSource=kms.amazonaws.com) && (($.eventName=DisableKey)
+        || ($.eventName=ScheduleKeyDeletion)) }"
+      MetricTransformations:
+      - MetricName: !Ref 37DisableDeleteCMK
+        MetricNamespace: !Ref CWMetricNamespace
+        MetricValue: 1
+  37DisableDeleteCMKAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Ref 37DisableDeleteCMK
+      AlarmDescription: Alarm for Disabling or Scheduled Deletion of Customer Created CMKs.
+      AlarmActions:
+      - Ref: SnsArnForCloudWatchEvents
+      MetricName: !Ref 37DisableDeleteCMK
+      Namespace: !Ref CWMetricNamespace
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      Period: 60
+      Statistic: Sum
+      Threshold: 1
+      TreatMissingData: notBreaching
+  38S3BucketPolicyChangesMetricFilter:
+    DependsOn:
+    - ResourceForEvaluateCisBenchmarkingPreconditions
+    - ResourceForGetCloudTrailCloudWatchLog
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !GetAtt ResourceForGetCloudTrailCloudWatchLog.LogName
+      FilterPattern: "{ ($.eventSource=s3.amazonaws.com) && (($.eventName=PutBucketAcl)
+        || ($.eventName = PutBucketPolicy) || ($.eventName = PutBucketCors) || ($.eventName
+        = PutBucketLifecycle) || ($.eventName = PutBucketReplication) || ($.eventName
+        = DeleteBucketPolicy) || ($.eventName = DeleteBucketCors) || ($.eventName=DeleteBucketLifecycle)
+        || ($.eventName = DeleteBucketReplication)) }"
+      MetricTransformations:
+      - MetricName: !Ref 38S3BucketPolicyChanges
+        MetricNamespace: !Ref CWMetricNamespace
+        MetricValue: 1
+  38S3BucketPolicyChangesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Ref 38S3BucketPolicyChanges
+      AlarmDescription: Alarm for S3 Bucket Policy Changes.
+      AlarmActions:
+      - Ref: SnsArnForCloudWatchEvents
+      MetricName: !Ref 38S3BucketPolicyChanges
+      Namespace: !Ref CWMetricNamespace
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      Period: 60
+      Statistic: Sum
+      Threshold: 1
+      TreatMissingData: notBreaching
+  39AWSConfigChangesMetricFilter:
+    DependsOn:
+    - ResourceForEvaluateCisBenchmarkingPreconditions
+    - ResourceForGetCloudTrailCloudWatchLog
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !GetAtt ResourceForGetCloudTrailCloudWatchLog.LogName
+      FilterPattern: "{($.eventSource = config.amazonaws.com) && (($.eventName=StopConfigurationRecorder)||($.eventName=DeleteDeliveryChannel)||($.eventName=PutDeliveryChannel)||($.eventName=PutConfigurationRecorder))}"
+      MetricTransformations:
+      - MetricName: !Ref 39AWSConfigChanges
+        MetricNamespace: !Ref CWMetricNamespace
+        MetricValue: 1
+  39AWSConfigChangesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Ref 39AWSConfigChanges
+      AlarmDescription: Alarm for AWS Config Configuration Changes.
+      AlarmActions:
+      - Ref: SnsArnForCloudWatchEvents
+      MetricName: !Ref 39AWSConfigChanges
+      Namespace: !Ref CWMetricNamespace
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      Period: 60
+      Statistic: Sum
+      Threshold: 1
+      TreatMissingData: notBreaching
+  310SecGroupChangesMetricFilter:
+    DependsOn:
+    - ResourceForEvaluateCisBenchmarkingPreconditions
+    - ResourceForGetCloudTrailCloudWatchLog
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !GetAtt ResourceForGetCloudTrailCloudWatchLog.LogName
+      FilterPattern: "{ ($.eventName = AuthorizeSecurityGroupIngress) || ($.eventName
+        = AuthorizeSecurityGroupEgress) || ($.eventName = RevokeSecurityGroupIngress)
+        || ($.eventName = RevokeSecurityGroupEgress) || ($.eventName = CreateSecurityGroup)
+        || ($.eventName = DeleteSecurityGroup)}"
+      MetricTransformations:
+      - MetricName: !Ref 310SecGroupChanges
+        MetricNamespace: !Ref CWMetricNamespace
+        MetricValue: 1
+  310SecGroupChangesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Ref 310SecGroupChanges
+      AlarmDescription: Alarm for Security Group Changes.
+      AlarmActions:
+      - Ref: SnsArnForCloudWatchEvents
+      MetricName: !Ref 310SecGroupChanges
+      Namespace: !Ref CWMetricNamespace
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      Period: 60
+      Statistic: Sum
+      Threshold: 1
+      TreatMissingData: notBreaching
+  311NACLChangesMetricFilter:
+    DependsOn:
+    - ResourceForEvaluateCisBenchmarkingPreconditions
+    - ResourceForGetCloudTrailCloudWatchLog
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !GetAtt ResourceForGetCloudTrailCloudWatchLog.LogName
+      FilterPattern: "{ ($.eventName = CreateNetworkAcl) || ($.eventName = CreateNetworkAclEntry)
+        || ($.eventName = DeleteNetworkAcl) || ($.eventName = DeleteNetworkAclEntry)
+        || ($.eventName = ReplaceNetworkAclEntry) || ($.eventName = ReplaceNetworkAclAssociation)
+        }"
+      MetricTransformations:
+      - MetricName: !Ref 311NACLChanges
+        MetricNamespace: !Ref CWMetricNamespace
+        MetricValue: 1
+  311NACLChangesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Ref 311NACLChanges
+      AlarmDescription: Alarm for Changes to Network Access Control Lists (NACL).
+      AlarmActions:
+      - Ref: SnsArnForCloudWatchEvents
+      MetricName: !Ref 311NACLChanges
+      Namespace: !Ref CWMetricNamespace
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      Period: 60
+      Statistic: Sum
+      Threshold: 1
+      TreatMissingData: notBreaching
+  312NetworkGatewayChangesMetricFilter:
+    DependsOn:
+    - ResourceForEvaluateCisBenchmarkingPreconditions
+    - ResourceForGetCloudTrailCloudWatchLog
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !GetAtt ResourceForGetCloudTrailCloudWatchLog.LogName
+      FilterPattern: "{ ($.eventName = CreateCustomerGateway) || ($.eventName = DeleteCustomerGateway)
+        || ($.eventName = AttachInternetGateway) || ($.eventName = CreateInternetGateway)
+        || ($.eventName = DeleteInternetGateway) || ($.eventName = DetachInternetGateway)
+        }"
+      MetricTransformations:
+      - MetricName: !Ref 312NetworkGatewayChanges
+        MetricNamespace: !Ref CWMetricNamespace
+        MetricValue: 1
+  312NetworkGatewayChangesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Ref 312NetworkGatewayChanges
+      AlarmDescription: Alarm for Changes to Network Gateways.
+      AlarmActions:
+      - Ref: SnsArnForCloudWatchEvents
+      MetricName: !Ref 312NetworkGatewayChanges
+      Namespace: !Ref CWMetricNamespace
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      Period: 60
+      Statistic: Sum
+      Threshold: 1
+      TreatMissingData: notBreaching
+  313RouteTableChangesMetricFilter:
+    DependsOn:
+    - ResourceForEvaluateCisBenchmarkingPreconditions
+    - ResourceForGetCloudTrailCloudWatchLog
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !GetAtt ResourceForGetCloudTrailCloudWatchLog.LogName
+      FilterPattern: "{ ($.eventName = CreateRoute) || ($.eventName = CreateRouteTable)
+        || ($.eventName = ReplaceRoute) || ($.eventName = ReplaceRouteTableAssociation)
+        || ($.eventName = DeleteRouteTable) || ($.eventName = DeleteRoute) || ($.eventName
+        = DisassociateRouteTable) }"
+      MetricTransformations:
+      - MetricName: !Ref 313RouteTableChanges
+        MetricNamespace: !Ref CWMetricNamespace
+        MetricValue: 1
+  313RouteTableChangesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Ref 313RouteTableChanges
+      AlarmDescription: Alarm for Route Table Changes.
+      AlarmActions:
+      - Ref: SnsArnForCloudWatchEvents
+      MetricName: !Ref 313RouteTableChanges
+      Namespace: !Ref CWMetricNamespace
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      Period: 60
+      Statistic: Sum
+      Threshold: 1
+      TreatMissingData: notBreaching
+  314VPCChangesMetricFilter:
+    DependsOn:
+    - ResourceForEvaluateCisBenchmarkingPreconditions
+    - ResourceForGetCloudTrailCloudWatchLog
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !GetAtt ResourceForGetCloudTrailCloudWatchLog.LogName
+      FilterPattern: "{ ($.eventName = CreateVpc) || ($.eventName = DeleteVpc) ||
+        ($.eventName = ModifyVpcAttribute) || ($.eventName = AcceptVpcPeeringConnection)
+        || ($.eventName = CreateVpcPeeringConnection) || ($.eventName = DeleteVpcPeeringConnection)
+        || ($.eventName = RejectVpcPeeringConnection) || ($.eventName = AttachClassicLinkVpc)
+        || ($.eventName = DetachClassicLinkVpc) || ($.eventName = DisableVpcClassicLink)
+        || ($.eventName = EnableVpcClassicLink) }"
+      MetricTransformations:
+      - MetricName: !Ref 314VPCChanges
+        MetricNamespace: !Ref CWMetricNamespace
+        MetricValue: 1
+  314VPCChangesChangesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Ref 314VPCChanges
+      AlarmDescription: Alarm for VPC Changes.
+      AlarmActions:
+      - Ref: SnsArnForCloudWatchEvents
+      MetricName: !Ref 314VPCChanges
+      Namespace: !Ref CWMetricNamespace
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      EvaluationPeriods: 1
+      Period: 60
+      Statistic: Sum
+      Threshold: 1
+
+      
